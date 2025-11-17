@@ -1,64 +1,101 @@
-from fastapi import FastAPI, HTTPException
-from typing import List, Union, Annotated
-from crud_models import TaskCreate, Task
+from fastapi import FastAPI, Depends, HTTPException
+from typing import List
+import crud_models
+from crud_schemas import TaskCreate, TaskResponse
+from crud_database import engine, SessionLocal
+from sqlalchemy.orm import Session
+
+crud_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# --- In-Memory Database ---
-# We'll store our Task objects in this list
-db: List[Task] = []
-current_id = 0 # This will help us generate unique IDs
+def get_db():
+    db = SessionLocal() # Open new a window 
+    try:
+        yield db # Let endpoint use this window
+    finally:
+        db.close() # Close window 
 
-# Create Post
-@app.post("/tasks")
-async def create_task(task_create: TaskCreate):
-    global current_id # We need change to global variable 
-    current_id += 1
+@app.post("/tasks", response_model=TaskResponse) 
+async def create_task(task: TaskCreate, db: Session = Depends(get_db)):
 
-    # 2. Create a new Task object (the "database" model)
-    #    .model_dump() gets a dict of the data from task_create
-    new_task = Task(id = current_id, **task_create.model_dump())
-    db.append(new_task)
-    return new_task
+    # Sqlalchemy model instance(copy of object)
+    db_task = crud_models.Task(**task.model_dump())
 
-# Show all tasks
-@app.get("/tasks")
-async def task_list():
-    return db
+    # add to the session (the staging area)
+    db.add(db_task)
 
-# Get the specific id 
-@app.get("/tasks/{id}")
-async def maching_task(id: int): # path parameter
-    for task in db:
-        if task.id == id:
-            return {"title": task.title}
-    raise HTTPException(status_code=404, detail="Item not found")
+    # commit to the database (save permanently)
+    db.commit()
 
-@app.put("/tasks/{id}")
-async def update_task(id: int, task_update: TaskCreate): # path parameter and request body
-    # request body = sending data from client to your server not like request
-    # for task in db:
-    #     if task.id == id:
-    #         task.title = task_update.title
-    #         task.completed = task_update.completed
-    #         return task
+    # Refresh the instance
+    #    This fetches the new ID and any default values (like 'completed=False')
+    #    from the database back into our 'db_task' object.
+    db.refresh(db_task)
+
+    # Return the complete object (FastAPI converts to it to Json)
+    return db_task
+
+@app.get("/tasks", response_model=List[TaskResponse])
+async def tasks_list(db: Session = Depends(get_db)):
+
+    # query all data from database
+    # 1. This is the SQLAlchemy query.
+    #    It means: "Query the Task model (table) and get .all() results."
     
-    # Using enumerate we get both index and task
-    for i, task in enumerate(db):
-        if task.id == id:
-            update_data = task_update.model_dump()
+    tasks = db.query(crud_models.Task).all()
 
-            updated_task = task.model_copy(update=update_data)
-            # Replace with the index
-            db[i] = updated_task
-            return updated_task
+    # 2. FastAPI automatically converts each item in the 'tasks' list
+    #    into JSON using your TaskResponse model (because of 'from_attributes = True').
+    return tasks
+
+@app.get("/tasks/{task_id}", response_model=List[TaskResponse])
+async def ge_task(task_id: int, db: Session = Depends(get_db)):
+    # 2. This is the efficient query:
+    #    - .query(): Start a query
+    #    - .filter(): Ask the DB to find where the Task.id column == task_id
+    #    - .first(): Stop as soon as you find one and return it.
+    task = db.query(crud_models.Task).filter(crud_models.Task.id == task_id).first()
+
+    # If the database returns None (it wasn't found), raise a 404
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
     
-    return HTTPException(status_code=404, detail="Item not found")
+    # If we found it, return the task object.
+    # FastAPI will handle the conversion.
+    return task
 
-@app.delete("/tasks/{id}")
-async def delete_task(id: int):
-    for task in db:
-        if task.id == id:
-            db.remove(task)
-        return {"messsage": "Task deleted successfully"}
-    return HTTPException(status_code=404, detail="Item not found")
+@app.put("/tasks/{task_id}", response_model=TaskResponse)
+async def update_task(task_id: int, task_update: TaskCreate, db: Session = Depends(get_db)):
+    
+    task_in_db = db.query(crud_models.Task).filter(crud_models.Task.id == task_id).first()
+    if task_in_db is None:
+        return HTTPException(status_code=404, detail="Task not found")
+    
+    # task_in_db.title = task_update.title
+    # task_in_db.description = task_update.description
+    # task_in_db.reminder_time = task_update.reminder_time
+    # task_in_db.completed = task_update.completed
+    update_data = task_update.model_dump()
+
+    for key, value in update_data.items():
+        setattr (task_in_db, key, value)
+
+    db.commit() # Change in database
+
+    # REFRESH the object to get the updated data from the DB
+    db.refresh(task_in_db)
+
+    return task_in_db
+
+@app.delete("/tasks/{task_id}")
+async def delete_task(task_id: int, db: Session = Depends(get_db)):
+    task_in_db = db.query(crud_models.Task).filter(crud_models.Task.id == task_id).first()
+    if task_in_db is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    db.delete(task_in_db)
+
+    db.commit()
+
+    return {"message": "Task deleted successfully"}

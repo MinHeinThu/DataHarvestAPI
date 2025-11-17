@@ -1,13 +1,11 @@
-from pydantic import BaseModel
 from crud_database import Base
+from sqlalchemy import Column, Integer, String, DateTime, Boolean
 
-# --- Models ---
-
-class TaskCreate(BaseModel):
-    title: str
-    completed: bool = False
-
-class Task(BaseModel):
-    id: int
-    title: str
-    completed: bool = False
+# Blueprint of database
+class Task(Base):
+    __tablename__ = "tasks"
+    id = Column(Integer, primary_key = True, index = True) # index is faster for queries that filter or sort
+    title = Column(String, index=True, nullable=False)
+    description = Column(String, nullable= True)
+    reminder_time = Column(DateTime(timezone=True), nullable=True, index=True)
+    completed = Column(Boolean, default=False, nullable=False, index=True)

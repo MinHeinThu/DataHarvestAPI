@@ -3,7 +3,6 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
 from dotenv import load_dotenv
-from fastapi import HTTPException
 
 # Secure loading
 load_dotenv() # # This line loads the .env file and sets the environment variables
